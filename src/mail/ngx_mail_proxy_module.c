@@ -11,10 +11,10 @@
 #include <ngx_event_connect.h>
 #include <ngx_mail.h>
 
-
 typedef struct {
     ngx_flag_t  enable;
     ngx_flag_t  pass_error_message;
+    ngx_flag_t  smtp_helo;
     ngx_flag_t  xclient;
     ngx_flag_t  smtp_auth;
     ngx_flag_t  proxy_protocol;
@@ -89,6 +89,13 @@ static ngx_command_t  ngx_mail_proxy_commands[] = {
       ngx_conf_set_flag_slot,
       NGX_MAIL_SRV_CONF_OFFSET,
       offsetof(ngx_mail_proxy_conf_t, proxy_protocol),
+      NULL },
+
+    { ngx_string("proxy_smtp_helo"),
+      NGX_MAIL_MAIN_CONF|NGX_MAIL_SRV_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      NGX_MAIL_SRV_CONF_OFFSET,
+      offsetof(ngx_mail_proxy_conf_t, smtp_helo),
       NULL },
 
       ngx_null_command
@@ -585,23 +592,39 @@ ngx_mail_proxy_smtp_handler(ngx_event_t *rev)
 
         s->connection->log->action = "sending HELO/EHLO to upstream";
 
-        cscf = ngx_mail_get_module_srv_conf(s, ngx_mail_core_module);
-
-        line.len = sizeof("HELO ")  - 1 + cscf->server_name.len + 2;
-        line.data = ngx_pnalloc(c->pool, line.len);
-        if (line.data == NULL) {
-            ngx_mail_proxy_internal_server_error(s);
-            return;
-        }
-
         pcf = ngx_mail_get_module_srv_conf(s, ngx_mail_proxy_module);
 
-        p = ngx_cpymem(line.data,
-                       ((s->esmtp || pcf->xclient) ? "EHLO " : "HELO "),
-                       sizeof("HELO ") - 1);
+        if (!pcf->xclient && pcf->smtp_helo && s->smtp_helo.len) {
+            line.len = sizeof("HELO ")  - 1 + s->smtp_helo.len + 2;
+            line.data = ngx_pnalloc(c->pool, line.len);
+            if (line.data == NULL) {
+                ngx_mail_proxy_internal_server_error(s);
+                return;
+            }
 
-        p = ngx_cpymem(p, cscf->server_name.data, cscf->server_name.len);
-        *p++ = CR; *p = LF;
+            p = ngx_cpymem(line.data,
+                        ((s->esmtp || pcf->xclient) ? "EHLO " : "HELO "),
+                        sizeof("HELO ") - 1);
+
+            p = ngx_cpymem(p, s->smtp_helo.data, s->smtp_helo.len);
+            *p++ = CR; *p = LF;
+        } else {
+            cscf = ngx_mail_get_module_srv_conf(s, ngx_mail_core_module);
+
+            line.len = sizeof("HELO ")  - 1 + cscf->server_name.len + 2;
+            line.data = ngx_pnalloc(c->pool, line.len);
+            if (line.data == NULL) {
+                ngx_mail_proxy_internal_server_error(s);
+                return;
+            }
+
+            p = ngx_cpymem(line.data,
+                        ((s->esmtp || pcf->xclient) ? "EHLO " : "HELO "),
+                        sizeof("HELO ") - 1);
+
+            p = ngx_cpymem(p, cscf->server_name.data, cscf->server_name.len);
+            *p++ = CR; *p = LF;
+        }
 
         if (pcf->xclient) {
             s->mail_state = ngx_smtp_helo_xclient;
@@ -1383,6 +1406,7 @@ ngx_mail_proxy_create_conf(ngx_conf_t *cf)
     pcf->enable = NGX_CONF_UNSET;
     pcf->pass_error_message = NGX_CONF_UNSET;
     pcf->xclient = NGX_CONF_UNSET;
+    pcf->smtp_helo = NGX_CONF_UNSET;
     pcf->smtp_auth = NGX_CONF_UNSET;
     pcf->proxy_protocol = NGX_CONF_UNSET;
     pcf->buffer_size = NGX_CONF_UNSET_SIZE;
@@ -1401,6 +1425,7 @@ ngx_mail_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
     ngx_conf_merge_value(conf->pass_error_message, prev->pass_error_message, 0);
     ngx_conf_merge_value(conf->xclient, prev->xclient, 1);
+    ngx_conf_merge_value(conf->smtp_helo, prev->smtp_helo, 0);
     ngx_conf_merge_value(conf->smtp_auth, prev->smtp_auth, 0);
     ngx_conf_merge_value(conf->proxy_protocol, prev->proxy_protocol, 0);
     ngx_conf_merge_size_value(conf->buffer_size, prev->buffer_size,
